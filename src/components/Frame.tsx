@@ -22,17 +22,34 @@ import { createStore } from "mipd";
 import { Label } from "~/components/ui/label";
 import { PROJECT_TITLE } from "~/lib/constants";
 
-function ExampleCard() {
+function UnfollowerList({ unfollowers }: { unfollowers: Array<{ fid: number, username: string, unfollowedAt: Date }> }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Welcome to the Frame Template</CardTitle>
-        <CardDescription>
-          This is an example card that you can customize or remove
-        </CardDescription>
+        <CardTitle>Recent Unfollowers</CardTitle>
+        <CardDescription>Last 10 users who stopped following you</CardDescription>
       </CardHeader>
-      <CardContent>
-        <Label>Place content in a Card here.</Label>
+      <CardContent className="space-y-2">
+        {unfollowers.length === 0 ? (
+          <div className="text-center text-gray-500">No unfollowers found</div>
+        ) : (
+          unfollowers.map((unfollower) => (
+            <div key={unfollower.fid} className="flex justify-between items-center py-1">
+              <div>
+                <span className="font-medium">{truncateAddress(unfollower.username)}</span>
+                <span className="text-xs text-gray-500 ml-2">
+                  {unfollower.unfollowedAt.toLocaleDateString()}
+                </span>
+              </div>
+              <button 
+                className="text-red-500 hover:text-red-700 text-xs"
+                onClick={() => console.log('Report', unfollower.fid)}
+              >
+                Report
+              </button>
+            </div>
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -41,6 +58,8 @@ function ExampleCard() {
 export default function Frame() {
   const [isSDKLoaded, setIsSDKLoaded] = useState(false);
   const [context, setContext] = useState<Context.FrameContext>();
+  const [unfollowers, setUnfollowers] = useState<Array<{ fid: number, username: string, unfollowedAt: Date }>>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [added, setAdded] = useState(false);
 
@@ -62,8 +81,74 @@ export default function Frame() {
     }
   }, []);
 
+  const fetchUnfollowers = useCallback(async () => {
+    try {
+      // Get current followers
+      const followersResponse = await fetch(
+        `https://api.neynar.com/v1/farcaster/followers?fid=${context?.user?.fid}&limit=100`,
+        {
+          headers: {
+            'api_key': NEYNAR_API_KEY,
+            'content-type': 'application/json'
+          }
+        }
+      );
+      
+      // Get following list to compare
+      const followingResponse = await fetch(
+        `https://api.neynar.com/v1/farcaster/following?fid=${context?.user?.fid}&limit=100`,
+        {
+          headers: {
+            'api_key': NEYNAR_API_KEY,
+            'content-type': 'application/json'
+          }
+        }
+      );
+
+      const [followers, following] = await Promise.all([
+        followersResponse.json(),
+        followingResponse.json()
+      ]);
+
+      // Find users who are in followers but not in following
+      const formerFollowers = followers.filter((follower: any) => 
+        !following.some((f: any) => f.fid === follower.fid)
+      );
+
+      // Get usernames for the unfollowers
+      const unfollowerDetails = await Promise.all(
+        formerFollowers.slice(0, 10).map(async (follower: any) => {
+          const res = await fetch(
+            `https://api.neynar.com/v1/farcaster/user?fid=${follower.fid}`,
+            {
+              headers: {
+                'api_key': NEYNAR_API_KEY,
+                'content-type': 'application/json'
+              }
+            }
+          );
+          const data = await res.json();
+          return {
+            fid: follower.fid,
+            username: data.result.user.username,
+            unfollowedAt: new Date(follower.updated_at)
+          };
+        })
+      );
+
+      setUnfollowers(unfollowerDetails);
+    } catch (error) {
+      console.error('Error fetching unfollowers:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [context?.user?.fid]);
+
   useEffect(() => {
     const load = async () => {
+      if (context?.user?.fid) {
+        await fetchUnfollowers();
+      }
       const context = await sdk.context;
       if (!context) {
         return;
@@ -140,7 +225,11 @@ export default function Frame() {
         <h1 className="text-2xl font-bold text-center mb-4 text-gray-700 dark:text-gray-300">
           {PROJECT_TITLE}
         </h1>
-        <ExampleCard />
+        {isLoading ? (
+          <div className="text-center text-gray-500">Loading unfollower data...</div>
+        ) : (
+          <UnfollowerList unfollowers={unfollowers} />
+        )}
       </div>
     </div>
   );
